@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Jan 18 20:17:31 2022
+
+@author: herearii
+"""
+
+import numpy as np
+import pandas as pd
+from os import listdir
+import matplotlib.pyplot as plt
+from collections import Counter
+import seaborn as sns
+from sklearn.feature_selection import VarianceThreshold
+import scipy as sp
+from sklearn.linear_model import LinearRegression
+#import autosklearn.regression
+from lifelines import CoxPHFitter
+
+def premier():
+    
+    radiomic_train = pd.read_csv('/home/herearii/Documents/Owkin/x_train/features/radiomics.csv')
+    
+    clinical_train = pd.read_csv('/home/herearii/Documents/Owkin/x_train/features/clinical_data.csv',index_col='PatientID')
+    
+    files = listdir('/home/herearii/Documents/Owkin/x_train/images')
+    
+    #Stockage des images CT scan
+    name_train = []
+    scan_train = []
+    mask_train = []
+    for file in files:
+        path = '/home/herearii/Documents/Owkin/x_train/images/'+file
+        archive_train = np.load(path)
+        name_train.append(file[8:11])
+        scan_train.append(archive_train['scan'])
+        mask_train.append(archive_train['mask'])
+    image_train = pd.DataFrame({'PatientID':name_train,'CT scan':scan_train,'mask':mask_train})
+    
+    #Correction noms des colonnes de radiomic_train
+    r0=radiomic_train.iloc[[0]].values.tolist()
+    r1=radiomic_train.iloc[[1]].values.tolist()
+    r0[0][0]=r1[0][0]
+    radiomic_train = radiomic_train.set_axis(r0[0],axis=1)
+    radiomic_train = radiomic_train.drop([0,1])
+    
+    #Clinical data
+    
+    ## Uniformiser les label dans Histology
+    print(clinical_train.Histology.value_counts(sort=False, dropna=False)) #nan remplacé par nos
+    clinical_train['Histology']=clinical_train['Histology'].fillna('nos') 
+    clinical_train['Histology']=clinical_train['Histology'].str.lower()
+    clinical_train['Histology']=clinical_train['Histology'].replace(['nsclc nos (not otherwise specified)'],'nos')
+    
+    ## Tstage, Mstage, Nstage
+    print(clinical_train.Tstage.value_counts(sort=False, dropna=False))
+    print(clinical_train.Mstage.value_counts(sort=False, dropna=False))
+    print(clinical_train.Nstage.value_counts(sort=False, dropna=False))
+    ###Tstage : un seul valeur 5 : 1. On l'ajoute dans 4 => 4 : 51
+    ###Mstage : seulement 6 valeurs dans 3 et 1. Cette variable peut poser problème dans la régression Cox => On le supprime
+    ###Nstage : les valeurs sont bien réparties
+    
+    clinical_train['Tstage']=clinical_train.Tstage.apply(lambda x: 4 if x==5 else x)
+    clinical_train.pop('Mstage')
+    
+    ## merge
+    clinical_train=pd.get_dummies(clinical_train,columns=['Histology','Tstage','Nstage'], drop_first=True)
+    #temp.index = clinical_train.index
+    #temp = temp.astype('int64')
+    #temp.dtypes
+    
+    ##Age valeur manquante
+    #moy = clinical_train['age'].median(skipna=True)
+    #clinical_train['age']=clinical_train['age'].fillna(moy)
+    
+    #Radiomic train
+    radiomic_train.index = radiomic_train['PatientID'].astype('int64')
+    radiomic_train.pop('PatientID')
+    
+    radiomic_train = radiomic_train.astype(float)
+    
+    
+    #CT scan
+    files = listdir('/home/herearii/Documents/Owkin/x_test/images')
+    
+    name_test = []
+    scan_test = []
+    mask_test = []
+    for file in files:
+        path = '/home/herearii/Documents/Owkin/x_test/images/'+file
+        archive_test = np.load(path)
+        name_test.append(file[8:11])
+        scan_test.append(archive_test['scan'])
+        mask_test.append(archive_test['mask'])
+    image_test = pd.DataFrame({'PatientID':name_test,'CT scan':scan_test,'mask':mask_test})
+    
+    ###########################################################
+    #TEST DATA
+    ###########################################################
+    
+    #Radiomics test
+    radiomic_test = pd.read_csv('/home/herearii/Documents/Owkin/x_test/features/radiomics.csv')
+    
+    r0=radiomic_test.iloc[[0]].values.tolist()
+    r1=radiomic_test.iloc[[1]].values.tolist()
+    r0[0][0]=r1[0][0]
+    radiomic_test = radiomic_test.set_axis(r0[0],axis=1)
+    radiomic_test = radiomic_test.drop([0,1])
+    
+    radiomic_test.index = radiomic_test['PatientID'].astype('int64')
+    radiomic_test.pop('PatientID')
+    
+    radiomic_test = radiomic_test.astype(float)
+    
+    
+    #Clinical test Data
+    clinical_test = pd.read_csv('/home/herearii/Documents/Owkin/x_test/features/clinical_data.csv',index_col='PatientID')
+    
+    ## Uniformiser les label dans Histology
+    print(clinical_test.Histology.value_counts(sort=False, dropna=False)) #nan remplacé par nos
+    clinical_test['Histology']=clinical_test['Histology'].fillna('nos') 
+    clinical_test['Histology']=clinical_test['Histology'].str.lower()
+    clinical_test['Histology']=clinical_test['Histology'].replace(['nsclc nos (not otherwise specified)'],'nos')
+    
+    ## Tstage, Mstage, Nstage
+    print(clinical_test.Tstage.value_counts(sort=False, dropna=False))
+    print(clinical_test.Mstage.value_counts(sort=False, dropna=False))
+    print(clinical_test.Nstage.value_counts(sort=False, dropna=False))
+    ###Tstage : un seul valeur 5 : 1. On l'ajoute dans 4 => 4 : 51
+    ###Mstage : seulement 6 valeurs dans 3 et 1. Cette variable peut poser problème dans la régression Cox => On le supprime
+    ###Nstage : on ajoute les valeurs de 4 dans 3 
+    
+    clinical_test['Tstage']=clinical_test.Tstage.apply(lambda x: 4 if x==5 else x)
+    clinical_test['Nstage']=clinical_test.Nstage.apply(lambda x: 3 if x==4 else x)
+    clinical_test.pop('Mstage')
+    
+    ## merge
+    clinical_test=pd.get_dummies(clinical_test,columns=['Histology','Tstage','Nstage'], drop_first=True)
+    #temp.index = clinical_train.index
+    #temp = temp.astype('int64')
+    #temp.dtypes
+    
+    ##Age  aucune valeur manquante
+    print(clinical_test.age.isna().value_counts(sort=False, dropna=False))
+    #moy = clinical_test['age'].median(skipna=True)
+    #clinical_test['age']=clinical_test['age'].fillna(moy)
+
+    #CT scan
+    image_test.index=image_test['PatientID']
+    image_test.pop('PatientID')
+    
+    #################
+    #MERGE DATA TRAIN
+    #################
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import  OneHotEncoder, StandardScaler
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
+
+    
+    x_train_temp = pd.merge(radiomic_train,clinical_train,left_index=True, right_index=True, sort=True)
+
+
+    # Dummy variables are not going to be transformed and are thus removed temporarily from the dataset.
+    x_train=x_train_temp.drop(columns=['Histology_large cell', 'Histology_nos',
+    'Histology_squamous cell carcinoma', 'Tstage_2', 'Tstage_3', 'Tstage_4',
+    'Nstage_1', 'Nstage_2', 'Nstage_3'])
+    
+    # SourceDataset variable qualitative
+    categorical_features_1 = ['SourceDataset']
+    
+    categorical_transformer_1 = Pipeline(
+        steps=[('encoder', OneHotEncoder(drop='first'))])
+    #Variable "SourceDataset" converti en one-hot vector.
+    
+    # Create pipeline for numeric features
+    numeric_features_1 = x_train.select_dtypes(include=['int64','float64']).columns
+    
+    numeric_transformer_1 = Pipeline(
+        steps=[('imputer', SimpleImputer(strategy="median")),('scaler', StandardScaler())
+    ])
+    
+    # Pretraitement
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num_1', numeric_transformer_1, numeric_features_1),
+            ('cat', categorical_transformer_1, categorical_features_1)
+        ])
+    
+    x_train_ = preprocessor.fit_transform(x_train)
+    
+    #DataFrame
+    x_train=pd.DataFrame(x_train_, index=x_train.index, columns=x_train.columns)
+    #Reprends les variables
+    temp=clinical_train.loc[:,['Histology_large cell', 'Histology_nos',
+    'Histology_squamous cell carcinoma', 'Tstage_2', 'Tstage_3', 'Tstage_4',
+    'Nstage_1', 'Nstage_2', 'Nstage_3']]
+    
+    #Merge 
+    x_train=pd.merge(x_train, temp,  left_index=True, right_index=True, sort=True)
+    x_train=x_train.rename(columns={'SourceDataset':'age','age':'SourceDataset'})
+    
+    ################
+    #MERGE DATA TEST
+    ################
+    
+    x_test_temp = pd.merge(radiomic_test,clinical_test,how='inner',left_index=True, right_index=True, sort=True)
+
+
+    # Dummy variables are not going to be transformed and are thus removed temporarily from the dataset.
+    x_test=x_test_temp.drop(columns=['Histology_large cell', 'Histology_nos',
+    'Histology_squamous cell carcinoma', 'Tstage_2', 'Tstage_3', 'Tstage_4',
+    'Nstage_1', 'Nstage_2', 'Nstage_3'])
+    
+    x_test_temp = preprocessor.transform(x_test)
+    
+    x_test=pd.DataFrame(x_test_temp, index=x_test.index, columns=x_test.columns)
+    #Dummy variables are included in a new dataset in order to be merged with the other variables afterward
+    test=clinical_test.loc[:,['Histology_large cell', 'Histology_nos',
+    'Histology_squamous cell carcinoma', 'Tstage_2', 'Tstage_3', 'Tstage_4',
+    'Nstage_1', 'Nstage_2', 'Nstage_3']]
+    
+    #Merge of the transformed variables with the dummy variables
+    x_test=pd.merge(x_test, test, how='inner', left_index=True, right_index=True, sort=True)
+    x_test=x_test.rename(columns={'SourceDataset':'age','age':'SourceDataset'})
+
+    
+    ########
+    #Y TRAIN
+    ########
+    
+    
+    y_train = pd.read_csv('/home/herearii/Documents/Owkin/y_train.csv',index_col='PatientID')
+    return x_train,x_test,y_train
+    
+x_train,x_test,y_train = premier()
+
+
